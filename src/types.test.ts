@@ -38,3 +38,11 @@ test('a CheckResult can carry evidence with file and line', () => {
   };
   assert.equal(result.evidence[0]?.file, 'src/config.test.ts');
 });
+
+test('default fixtures agree: the body references every linked issue', () => {
+  const pr = makePr();
+  for (const issue of pr.linkedIssues) {
+    assert.ok(pr.body.includes(`#${issue.number}`), `body should mention #${issue.number}`);
+  }
+  assert.equal(makeIssue().number, pr.linkedIssues[0]?.number);
+});

@@ -16,7 +16,11 @@ export function makeFile(path: string, overrides: Partial<PrFile> = {}): PrFile 
   return { path, status: 'modified', additions: 1, deletions: 0, ...overrides };
 }
 
-/** Builds a PR snapshot with sensible defaults; override any field. */
+/**
+ * Builds a PR snapshot with sensible defaults; override any field.
+ * The defaults are consistent: the body says "Fixes #12" and #12 is in `linkedIssues`.
+ * If you override `body`, override `linkedIssues` to match.
+ */
 export function makePr(overrides: Partial<PrSnapshot> = {}): PrSnapshot {
   return {
     owner: 'acme',

@@ -12,7 +12,11 @@ export type AuthorAssociation =
 export interface PrAuthor {
   readonly login: string;
   readonly association: AuthorAssociation;
-  /** True when this is the author's first PR to the repository. */
+  /**
+   * True when this is the author's first PR to the repository.
+   * Source of truth for fairness rules: the collector computes it from the
+   * author's PR history, because `association` is coarse and can lag.
+   */
   readonly isFirstTime: boolean;
   /** True for bot accounts such as `dependabot[bot]`. */
   readonly isBot: boolean;
@@ -41,7 +45,10 @@ export interface LinkedIssueRef {
   readonly strength: LinkStrength;
 }
 
-/** Outcome of one CI check or status on the head commit. */
+/**
+ * Outcome of one CI check or status on the head commit.
+ * GitHub reports a running check with `conclusion: null`; collectors map that to `'pending'`.
+ */
 export interface CheckOutcome {
   readonly name: string;
   readonly conclusion: 'success' | 'failure' | 'neutral' | 'cancelled' | 'skipped' | 'timed_out' | 'action_required' | 'pending';
