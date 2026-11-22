@@ -5,7 +5,7 @@ Status values: `todo`, `review (PR #n)`, `done (PR #n)`, `blocked: <reason>`. Si
 ## M0 Pure logic (target 21 Dec 2026)
 
 ### PR-001 Core types for a PR snapshot
-- Status: todo
+- Status: done (PR #1)
 - Size: S
 - Depends on: none
 - Goal: `src/types.ts` with `PrSnapshot` (number, title, body, author `{login, association, isFirstTime}`, base/head SHAs, files `{path, status, additions, deletions, patch?}`, labels, linkedIssues, checks `{name, conclusion}`), `IssueSnapshot`, and `CheckResult` (id, passed, points, message, evidence).
