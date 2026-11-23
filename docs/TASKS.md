@@ -12,7 +12,7 @@ Status values: `todo`, `review (PR #n)`, `done (PR #n)`, `blocked: <reason>`. Si
 - Acceptance: types exported from `src/index.ts`; a fixture builder `test/fixtures/pr.ts` creates snapshots for tests.
 
 ### PR-002 Linked issue extraction
-- Status: todo
+- Status: review
 - Size: S
 - Depends on: PR-001
 - Goal: `src/extract/links.ts` finds linked issues in PR title and body: closing keywords (`fixes #12`, `closes owner/repo#3`, `resolves https://github.com/o/r/issues/4`), bare `#n` mentions (marked as weak), and ignores code blocks and quotes.
