@@ -24,6 +24,11 @@ const cases: ReadonlyArray<{ name: string; body: string; want: LinkedIssueRef[] 
   { name: 'refs inside a fenced code block are ignored', body: 'Intro\n```js\n// fixes #11\n```\nFixes #12', want: [closing(12)] },
   { name: 'tilde fences and longer fences', body: '~~~\nfixes #1\n~~~\n````\n```\nfixes #2\n````\ncloses #3', want: [closing(3)] },
   { name: 'unterminated fence hides the rest', body: 'closes #1\n```\nfixes #2', want: [closing(1)] },
+  { name: 'indented code blocks are ignored', body: 'Intro\n\n    fixes #21\n\n\tcloses #22\n\nFixes #23', want: [closing(23)] },
+  { name: 'an indented code block may start the body', body: '    fixes #24\nFixes #25', want: [closing(25)] },
+  { name: 'an indented line inside a paragraph is not code', body: 'Intro text\n    fixes #26', want: [closing(26)] },
+  { name: 'indented list continuations still count', body: '- item\n\n    fixes #27\n1. step\n\n   closes #28', want: [closing(27), closing(28)] },
+  { name: 'backslash-escaped refs are not links', body: 'escaped \\#29 and \\GH-30 but #31', want: [mention(31)] },
   { name: 'inline code is ignored', body: 'Run `fixes #13` then ``closes #14`` but fixes #15', want: [closing(15)] },
   { name: 'block quotes are ignored', body: '> Fixes #16\n> > closes #17\nResolves #18', want: [closing(18)] },
   { name: 'HTML comments from PR templates are ignored', body: '<!-- Write "Fixes #123" here -->\nFixes #19\n<!-- unterminated fixes #20', want: [closing(19)] },
@@ -66,8 +71,17 @@ test('stripNonProse keeps line count and ordinary text', () => {
 });
 
 test('long hostile input finishes quickly', () => {
-  const body = `${'fixes '.repeat(20_000)}${'#'.repeat(20_000)}${'`'.repeat(20_000)}`;
-  const started = performance.now();
-  findIssueRefs(body, context);
-  assert.ok(performance.now() - started < 1_000);
+  const backtickRuns = Array.from({ length: 5_000 }, (_, i) => `${'`'.repeat((i % 60) + 1)}a`).join(' ');
+  const inputs = [
+    `${'fixes '.repeat(20_000)}${'#'.repeat(20_000)}${'`'.repeat(20_000)}`,
+    backtickRuns,
+    '<!--'.repeat(50_000),
+    `${'a/'.repeat(50_000)}#1`,
+    `${'    x\n\n'.repeat(20_000)}fixes #1`,
+  ];
+  for (const body of inputs) {
+    const started = performance.now();
+    findIssueRefs(body, context);
+    assert.ok(performance.now() - started < 1_000, `took too long on input starting ${JSON.stringify(body.slice(0, 12))}`);
+  }
 });
