@@ -49,3 +49,18 @@ export const blankLines = ['@@ -3,0 +3,2 @@', '+', '+  '].join('\n');
 
 /** CRLF line endings and the no-newline marker. */
 export const crlfReindent = '@@ -1 +1 @@\r\n-\tx = 1\r\n\\ No newline at end of file\r\n+  x = 1\r\n\\ No newline at end of file';
+
+/** Whitespace removed inside a string literal: a real change. */
+export const innerSpace = ['@@ -1 +1 @@', '-msg = "a b"', '+msg = "ab"'].join('\n');
+
+/** Python: `return 1` dedented out of the `if` block. A logic change. */
+export const pythonDedent = [
+  '@@ -1,3 +1,3 @@',
+  ' def f(x):',
+  '     if x:',
+  '-        return 1',
+  '+    return 1',
+].join('\n');
+
+/** Python: trailing spaces removed and a blank line added, indentation unchanged. */
+export const pythonTrailing = ['@@ -1,2 +1,3 @@', '-def f(x):   ', '+def f(x):', '+', '     return x'].join('\n');

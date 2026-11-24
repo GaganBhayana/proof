@@ -1,7 +1,15 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { PrFile } from '../types.ts';
-import { analyzeScope, classifyPath, isFormattingOnly, parseHunks, type ChurnKind, type FileClass } from './scope.ts';
+import {
+  analyzeScope,
+  classifyPath,
+  isFormattingOnly,
+  isIndentSensitive,
+  parseHunks,
+  type ChurnKind,
+  type FileClass,
+} from './scope.ts';
 import { makeFile } from '../../test/fixtures/pr.ts';
 import * as patches from '../../test/fixtures/patches.ts';
 
@@ -87,6 +95,8 @@ const formattingCases: ReadonlyArray<[string, string, boolean]> = [
   ['deletions only', patches.deletion, false],
   ['an empty patch', '', false],
   ['a hunk header with no changed lines', '@@ -1,1 +1,1 @@\n unchanged', false],
+  ['whitespace removed inside a string literal', patches.innerSpace, false],
+  ['one token split into two', '@@ -1 +1 @@\n-foobar\n+foo bar', false],
 ];
 
 for (const [name, patch, want] of formattingCases) {
@@ -94,6 +104,24 @@ for (const [name, patch, want] of formattingCases) {
     assert.equal(isFormattingOnly(patch), want);
   });
 }
+
+test('isFormattingOnly with keepIndentation rejects re-indentation but allows trailing space and blank lines', () => {
+  assert.equal(isFormattingOnly(patches.pythonDedent), true);
+  assert.equal(isFormattingOnly(patches.pythonDedent, { keepIndentation: true }), false);
+  assert.equal(isFormattingOnly(patches.reindent, { keepIndentation: true }), false);
+  assert.equal(isFormattingOnly(patches.rewrap, { keepIndentation: true }), false);
+  assert.equal(isFormattingOnly(patches.pythonTrailing, { keepIndentation: true }), true);
+  assert.equal(isFormattingOnly(patches.blankLines, { keepIndentation: true }), true);
+});
+
+test('isIndentSensitive matches Python, YAML and Makefiles only', () => {
+  for (const path of ['app/main.py', 'stubs/x.pyi', 'config.yaml', '.github/workflows/ci.yml', 'Makefile', 'build/rules.mk']) {
+    assert.equal(isIndentSensitive(path), true, path);
+  }
+  for (const path of ['src/a.ts', 'README.md', 'go.mod', 'yaml/notes.txt']) {
+    assert.equal(isIndentSensitive(path), false, path);
+  }
+});
 
 const kinds = (files: PrFile[]): ChurnKind[] => analyzeScope(files).churn.map((c) => c.kind);
 
@@ -151,6 +179,11 @@ test('the wrong manifest does not count', () => {
   assert.deepEqual(kinds([makeFile('pyproject.toml'), makeFile('Cargo.lock')]), ['lockfile-without-manifest']);
 });
 
+test('a manifest inside a vendored directory does not satisfy a lockfile', () => {
+  assert.deepEqual(kinds([makeFile('vendor/x/package.json'), makeFile('package-lock.json')]), ['lockfile-without-manifest']);
+  assert.deepEqual(kinds([makeFile('node_modules/y/package.json'), makeFile('yarn.lock')]), ['lockfile-without-manifest']);
+});
+
 test('lockfiles inside vendored directories are not flagged', () => {
   assert.deepEqual(kinds([makeFile('vendor/lib/Cargo.lock')]), []);
 });
@@ -164,6 +197,12 @@ test('formatting-only files are flagged; files without a patch are not', () => {
   assert.deepEqual(report.churn.map((c) => c.kind), ['formatting-only']);
   assert.deepEqual(report.churn[0]?.evidence.map((e) => e.file), ['src/a.ts']);
   assert.equal(report.churn[0]?.message, '1 file with whitespace-only changes');
+});
+
+test('re-indenting a Python file is not formatting churn, a trailing-space fix is', () => {
+  assert.deepEqual(kinds([makeFile('app/logic.py', { patch: patches.pythonDedent })]), []);
+  assert.deepEqual(kinds([makeFile('app/logic.py', { patch: patches.pythonTrailing })]), ['formatting-only']);
+  assert.deepEqual(kinds([makeFile('.github/workflows/ci.yml', { patch: patches.reindent })]), []);
 });
 
 test('generated files are flagged', () => {
@@ -181,6 +220,7 @@ test('a diff over the line limit is flagged; lockfile lines do not count', () =>
 test('a diff over the file limit is flagged, and limits can be overridden', () => {
   const many = Array.from({ length: 51 }, (_, i) => makeFile(`src/f${i}.ts`));
   assert.deepEqual(kinds(many), ['large-diff']);
+  assert.deepEqual(kinds(many.slice(0, 50)), []);
   const report = analyzeScope([makeFile('src/a.ts', { additions: 30 }), makeFile('src/b.ts')], { maxReviewableLines: 20, maxFiles: 1 });
   assert.deepEqual(report.churn.map((c) => c.kind), ['large-diff']);
   assert.deepEqual(report.churn[0]?.evidence.map((e) => e.note), [

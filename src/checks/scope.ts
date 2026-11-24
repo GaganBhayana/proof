@@ -133,22 +133,53 @@ export function parseHunks(patch: string): { removed: string[]; added: string[] 
   return hunks;
 }
 
+/** File types where leading indentation is syntax, so re-indenting is a real change. */
+const INDENT_SENSITIVE_NAME = /\.(?:py|pyi|pyw|ya?ml|coffee|haml|pug|jade|sass|styl|nim|fs|fsx|hs|elm|mk)$|^(?:makefile|gnumakefile)$/;
+
+/** True for paths whose language treats leading indentation as syntax (Python, YAML, Makefiles, ...). */
+export function isIndentSensitive(path: string): boolean {
+  return INDENT_SENSITIVE_NAME.test(splitPath(path).name);
+}
+
+/** Options for {@link isFormattingOnly}. */
+export interface FormattingOptions {
+  /**
+   * Treat leading indentation as meaningful: only trailing whitespace and blank lines
+   * may change, and lines may not be re-wrapped. Use for indentation-sensitive files.
+   */
+  readonly keepIndentation?: boolean;
+}
+
+/** Whitespace-separated tokens across lines, so `a b` and `ab` stay different. */
+const tokens = (lines: readonly string[]): string[] => lines.join('\n').split(/\s+/).filter((t) => t !== '');
+
+/** Non-blank lines with trailing whitespace removed and indentation kept. */
+const indentedLines = (lines: readonly string[]): string[] => lines.map((l) => l.trimEnd()).filter((l) => l !== '');
+
+const sameList = (a: readonly string[], b: readonly string[]): boolean =>
+  a.length === b.length && a.every((v, i) => v === b[i]);
+
 /**
- * True when the patch has at least one changed line and every hunk only changes whitespace:
- * removed and added text are equal once all whitespace is dropped. Re-wrapped lines and
- * added or removed blank lines count as formatting.
+ * True when the patch has at least one changed line and every hunk only changes whitespace.
+ * By default removed and added text must have the same whitespace-separated tokens, so
+ * re-indentation, re-wrapped lines and added or removed blank lines count as formatting,
+ * but joining or splitting a token (`"a b"` to `"ab"`) does not. With `keepIndentation`,
+ * leading indentation must also match line by line.
  */
-export function isFormattingOnly(patch: string): boolean {
-  const squash = (lines: string[]) => lines.join('').replace(/\s+/g, '');
+export function isFormattingOnly(patch: string, options: FormattingOptions = {}): boolean {
+  const normalize = options.keepIndentation === true ? indentedLines : tokens;
   const hunks = parseHunks(patch).filter((h) => h.removed.length + h.added.length > 0);
-  return hunks.length > 0 && hunks.every((h) => squash(h.removed) === squash(h.added));
+  return hunks.length > 0 && hunks.every((h) => sameList(normalize(h.removed), normalize(h.added)));
 }
 
 function matchesManifest(name: string, patterns: readonly string[]): boolean {
   return patterns.some((p) => (p.startsWith('*') ? name.endsWith(p.slice(1)) : name === p));
 }
 
-/** A lockfile's manifest counts when it changed in the lockfile's directory or below (workspaces). */
+/**
+ * A lockfile's manifest counts when it changed in the lockfile's directory or below (workspaces).
+ * Manifests inside vendored directories never count.
+ */
 function lockfilesWithoutManifest(files: readonly PrFile[]): PrFile[] {
   return files.filter((file) => {
     const { dirs, name } = splitPath(file.path);
@@ -157,6 +188,7 @@ function lockfilesWithoutManifest(files: readonly PrFile[]): PrFile[] {
     const prefix = dirs.length === 0 ? '' : `${dirs.join('/')}/`;
     return !files.some((other) => {
       const o = splitPath(other.path);
+      if (o.dirs.some((d) => VENDORED_DIRS.has(d))) return false;
       return [...o.dirs, o.name].join('/').startsWith(prefix) && matchesManifest(o.name, patterns);
     });
   });
@@ -196,7 +228,8 @@ function fileEvidence(files: readonly PrFile[], note: string): Evidence[] {
 /**
  * Classifies every changed file, computes totals and flags unrelated churn:
  * lockfiles changed without their manifest, formatting-only patches, generated files
- * and diffs over the size limits. Files without a patch are never formatting-only.
+ * and diffs over the size limits. Files without a patch are never formatting-only, and
+ * re-indentation does not count as formatting in indentation-sensitive files.
  */
 export function analyzeScope(files: readonly PrFile[], options: ScopeOptions = {}): ScopeReport {
   const limits = { ...DEFAULT_SCOPE_OPTIONS, ...options };
@@ -218,7 +251,9 @@ export function analyzeScope(files: readonly PrFile[], options: ScopeOptions = {
     });
   }
 
-  const formatting = files.filter((f) => f.patch !== undefined && isFormattingOnly(f.patch));
+  const formatting = files.filter(
+    (f) => f.patch !== undefined && isFormattingOnly(f.patch, { keepIndentation: isIndentSensitive(f.path) }),
+  );
   if (formatting.length > 0) {
     churn.push({
       kind: 'formatting-only',
