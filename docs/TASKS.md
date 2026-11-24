@@ -19,7 +19,7 @@ Status values: `todo`, `review (PR #n)`, `done (PR #n)`, `blocked: <reason>`. Si
 - Acceptance: table-driven tests with at least 15 cases, including cross-repo links and keywords inside code fences.
 
 ### PR-003 Diff scope analysis
-- Status: review (PR #3)
+- Status: done (PR #3)
 - Size: M
 - Depends on: PR-001
 - Goal: `src/checks/scope.ts` classifies changed files (source, test, docs, config, lockfile, generated, vendored, CI) by path rules, computes totals, and flags unrelated churn: lockfile-only changes without manifest changes, formatting-only patches (whitespace-only hunks), generated files, and diffs over a size threshold.
