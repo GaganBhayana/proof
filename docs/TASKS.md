@@ -26,7 +26,7 @@ Status values: `todo`, `review (PR #n)`, `done (PR #n)`, `blocked: <reason>`. Si
 - Acceptance: tests for each class and churn flag using small patch fixtures.
 
 ### PR-004 Test signals
-- Status: todo
+- Status: review
 - Size: S
 - Depends on: PR-003
 - Goal: `src/checks/tests.ts` reports tests added, modified or deleted, and newly skipped tests by scanning added patch lines for `.skip(`, `xit(`, `xdescribe(`, `@pytest.mark.skip`, `t.Skip(`, `@Disabled`.
