@@ -30,11 +30,41 @@ for (const [line, language, marker] of markerCases) {
   });
 }
 
-for (const line of ['// it.skip("x")', '# @pytest.mark.skip', ' * @Disabled', '/* xit("x") */', 'exit(1)', 'fixit(2)', 'obj.xit(3)', '@DisabledFor', '']) {
+const notMarkers = [
+  '// it.skip("x")',
+  '# @pytest.mark.skip',
+  ' * @Disabled',
+  '/* xit("x") */',
+  '/* a */ /* it.skip("b") */',
+  'exit(1)',
+  'fixit(2)',
+  'obj.xit(3)',
+  '@DisabledFor',
+  '',
+];
+
+for (const line of notMarkers) {
   test(`findSkipMarker ignores: ${JSON.stringify(line)}`, () => {
     assert.equal(findSkipMarker(line), undefined);
   });
 }
+
+for (const [line, marker] of [
+  ['/* flaky */ it.skip("x", fn)', '.skip('],
+  ['/**/xit("x", fn)', 'xit('],
+  ['/* a */ /* b */ @Disabled', '@Disabled'],
+  ['t.Skip("x") /* unclosed', 't.Skip('],
+] as const) {
+  test(`findSkipMarker sees code after an inline block comment: ${line}`, () => {
+    assert.equal(findSkipMarker(line)?.marker, marker);
+  });
+}
+
+test('findSkipMarker stays fast on a long line of unclosed comment openers', () => {
+  const started = performance.now();
+  assert.equal(findSkipMarker(`x ${'/*'.repeat(200_000)}`), undefined);
+  assert.ok(performance.now() - started < 1000);
+});
 
 test('patchLines numbers added lines in the new file and handles CRLF', () => {
   const lines = patchLines('@@ -1,2 +7,3 @@\r\n context\r\n-old\r\n+new\r\n\\ No newline at end of file\r\n+more');
@@ -107,6 +137,32 @@ test('replacing one skip with two leaves one new skip', () => {
   assert.deepEqual(newlySkipped.map((s) => s.quote), ['it.skip("c", fn);']);
 });
 
+test('a skipped test moved to another test file is not new', () => {
+  const { newlySkipped } = analyzeTests([
+    makeFile('test/old.test.ts', { status: 'removed', patch: '@@ -1 +0,0 @@\n-it.skip("a", fn);' }),
+    makeFile('test/new.test.ts', { status: 'added', patch: '@@ -0,0 +1 @@\n+  it.skip("a", fn);' }),
+  ]);
+  assert.deepEqual(newlySkipped, []);
+});
+
+test('a removed skip in one file does not hide a different new skip in another', () => {
+  const { newlySkipped } = analyzeTests([
+    makeFile('test/a.test.ts', { patch: '@@ -1 +1 @@\n-it.skip("a", fn);\n+it("a", fn);' }),
+    makeFile('test/b.test.ts', { patch: '@@ -1 +1,2 @@\n+it.skip("b", fn);' }),
+  ]);
+  assert.deepEqual(
+    newlySkipped.map((s) => [s.file, s.quote]),
+    [['test/b.test.ts', 'it.skip("b", fn);']],
+  );
+});
+
+test('one removed skip cancels only one of two identical added skips', () => {
+  const { newlySkipped } = analyzeTests([
+    makeFile('test/a.test.ts', { patch: '@@ -1 +1,2 @@\n-xit("a");\n+xit("a");\n+xit("a");' }),
+  ]);
+  assert.equal(newlySkipped.length, 1);
+});
+
 test('comments and look-alikes are not skips', () => {
   const { newlySkipped } = analyzeTests([makeFile('test/a.test.ts', { patch: skips.notSkips })]);
   assert.deepEqual(newlySkipped, []);
@@ -125,4 +181,11 @@ test('long quotes are cut to MAX_QUOTE_LENGTH', () => {
   const patch = `@@ -0,0 +1 @@\n+it.skip("${'x'.repeat(500)}")`;
   const [skip] = analyzeTests([makeFile('test/a.test.ts', { patch })]).newlySkipped;
   assert.equal(skip?.quote.length, MAX_QUOTE_LENGTH);
+});
+
+test('a quote cut never ends in half a surrogate pair', () => {
+  const patch = `@@ -0,0 +1 @@\n+it.skip("${'x'.repeat(190)}\u{1F600}")`;
+  const [skip] = analyzeTests([makeFile('test/a.test.ts', { patch })]).newlySkipped;
+  assert.equal(skip?.quote.length, MAX_QUOTE_LENGTH - 1);
+  assert.doesNotMatch(skip?.quote ?? '', /[\uD800-\uDBFF]$/);
 });
