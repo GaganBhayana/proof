@@ -33,7 +33,7 @@ Status values: `todo`, `review (PR #n)`, `done (PR #n)`, `blocked: <reason>`. Si
 - Acceptance: tests cover JS, Python, Go and Java patterns, and removed skips are not counted.
 
 ### PR-005 CONTRIBUTING.md rule extraction
-- Status: todo
+- Status: review (PR #5)
 - Size: M
 - Depends on: PR-001
 - Goal: `src/rules/contributing.ts` reads CONTRIBUTING.md and the PR template and extracts checkable rules by pattern: issue required, tests required, DCO sign-off, changelog entry, one topic per PR, template sections that must be filled. Each rule carries the source line as evidence.
