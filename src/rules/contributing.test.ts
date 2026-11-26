@@ -135,6 +135,22 @@ const sentenceCases: ReadonlyArray<[string, RuleKind[]]> = [
   ['Keep pull requests small and focused.', ['single-topic']],
   ['Please do one thing per pull request.', ['single-topic']],
   ['Avoid unrelated changes in your PR.', ['single-topic']],
+  // "don't require" waives a rule even though it contains "require"
+  ["We don't require tests for documentation changes.", []],
+  ['We do not require a DCO sign-off.', []],
+  ['Tests aren’t required for docs.', []],
+  ['We never require an issue for typo fixes.', []],
+  // a verb only pairs with "tests" a few words away
+  ['Please write a clear description and make sure the tests pass.', []],
+  ['Please update the README and run the linter before you push the tests.', []],
+  ['Please add unit and integration tests for new features.', ['tests-required']],
+  ['New code must be accompanied by appropriate unit tests.', ['tests-required']],
+  ['Releases need sign-off from two maintainers, who then tag the release commit.', []],
+  // negation and the security exclusion apply per clause
+  ["You don't need to open an issue for typo fixes, but all other PRs must reference an issue.", ['issue-required']],
+  ['Please add tests for new code; benchmarks are optional.', ['tests-required']],
+  ['Every pull request must reference an issue, except security fixes.', ['issue-required']],
+  ['Tests are welcome but optional.', []],
 ];
 
 for (const [sentence, expected] of sentenceCases) {
@@ -178,4 +194,20 @@ test('hostile input stays fast', () => {
   fromContributing('#'.repeat(300_000));
   fromContributing('- [ ] '.repeat(50_000));
   assert.ok(performance.now() - start < 2_000, 'took too long');
+});
+
+test('a clause-level match quotes the whole sentence', () => {
+  const sentence = 'Benchmarks are optional, but please add tests for new code.';
+  assert.equal(fromContributing(sentence)[0]?.evidence[0]?.quote, sentence);
+});
+
+test('template headings inside HTML comments or fenced code are not sections', () => {
+  const text = ['## Summary', '', '<!--', '## Hidden', '-->', '```', '## Code', '```', '', '## Testing'].join('\n');
+  const sections = extractContributingRules({ prTemplate: { path: 't.md', text } });
+  assert.deepEqual(
+    sections.map((rule) => (rule.kind === 'template-section' ? `${rule.section}@${rule.evidence[0]?.line}` : rule.kind)),
+    ['Summary@1', 'Testing@10'],
+  );
+  const summarySection = sections[0];
+  assert.equal(summarySection?.kind === 'template-section' ? summarySection.placeholder : undefined, '<!--\n## Hidden\n-->\n```\n## Code\n```');
 });

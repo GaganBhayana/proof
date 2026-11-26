@@ -49,8 +49,21 @@ export const RULE_KINDS: readonly RuleKind[] = ['issue-required', 'tests-require
 
 const REQUIREMENT =
   /\b(?:must|required?|requires|need(?:s)? to|should|please|always|make sure|ensure|every|each|only (?:accept|merge|review)|mandatory|expected to)\b/i;
-const NEGATION =
-  /\b(?:not (?:required|necessary|needed|mandatory)|no need|don'?t (?:need|have) to|do not need|doesn'?t need|optional|maintainers? (?:will|handle|update|write|take care|add))\b/i;
+const NEGATION = new RegExp(
+  [
+    String.raw`\b(?:not|aren['’]?t|isn['’]?t) (?:required|necessary|needed|mandatory)\b`,
+    String.raw`\b(?:do|does)(?: not|n['’]?t) (?:need|have to|require|ask for|expect|enforce)\b`,
+    String.raw`\bnever (?:require|need|ask for)\b`,
+    String.raw`\bno need\b`,
+    String.raw`\boptional\b`,
+    String.raw`\bmaintainers? (?:will|handle|update|write|take care|add)\b`,
+  ].join('|'),
+  'i',
+);
+/** Clause breaks: "X is optional, but Y must…" states a rule in its second clause. */
+const CLAUSE_BREAK = /;|\b(?:but|however|except)\b/i;
+/** A short gap of up to four words, so a verb only pairs with a nearby noun. */
+const GAP = String.raw`(?:\s+[^\s.]+){0,4}?\s+`;
 const PR_CONTEXT =
   /\b(?:pull requests?|PRs?|before (?:you )?(?:start|begin|work|submit|open|send)|link(?:ed)?|reference[sd]?|associated|corresponding|tracking|approved|fixes|closes)\b/i;
 
@@ -58,7 +71,7 @@ const ISSUE = /\bissues?\b|#\d+/i;
 const SECURITY = /\b(?:security|vulnerabilit)/i;
 const TESTS = new RegExp(
   [
-    String.raw`\b(?:add|adds|added|adding|include[sd]?|including|write|writing|written|cover(?:s|ed)?|accompan\w*|come with|update[sd]?)\b[^.]*\b(?:tests?|test cases?|specs?|coverage)\b`,
+    String.raw`\b(?:add|adds|added|adding|include[sd]?|including|write|writing|written|cover(?:s|ed)?|accompan\w*|come with|update[sd]?)\b${GAP}(?:tests?|test cases?|specs?|coverage)\b`,
     String.raw`\b(?:tests?|test cases?) (?:for|covering)\b`,
     String.raw`\btests? (?:are|is) (?:required|mandatory|expected)\b`,
   ].join('|'),
@@ -69,8 +82,8 @@ const DCO = new RegExp(
     String.raw`\b(?:DCO|Developer Certificate of Origin|Signed-off-by)\b`,
     String.raw`--signoff\b`,
     String.raw`\bgit commit -s\b`,
-    String.raw`\bsign(?:ed)?[- ]?off\b[^.]*\bcommits?\b`,
-    String.raw`\bcommits?\b[^.]*\bsign(?:ed)?[- ]?off\b`,
+    String.raw`\bsign(?:ed)?[- ]?off\b${GAP}commits?\b`,
+    String.raw`\bcommits?\b${GAP}sign(?:ed)?[- ]?off\b`,
   ].join('|'),
   'i',
 );
@@ -108,8 +121,9 @@ const MATCHERS: Readonly<Record<RuleKind, (sentence: string, implied: boolean) =
  * Reads CONTRIBUTING.md and the PR template and returns the rules PRoof can check:
  * issue required, tests required, DCO sign-off, changelog entry, one topic per PR,
  * and one `template-section` rule per template heading (headings marked optional are skipped).
- * Detection is by pattern, sentence by sentence; negated sentences ("tests are not required")
- * do not count. Code blocks and, in CONTRIBUTING.md, HTML comments are ignored. In the PR
+ * Detection is by pattern, clause by clause (clauses split at `;`, "but", "however" and
+ * "except"); negated clauses ("tests are not required") do not count, and evidence quotes the
+ * whole sentence. Code blocks and, in CONTRIBUTING.md, HTML comments are ignored. In the PR
  * template, comments and checklist items count, since authors see them while filling it in,
  * and a checklist item implies the requirement. Text rules come first, in {@link RULE_KINDS} order.
  */
@@ -121,13 +135,20 @@ export function extractContributingRules(sources: RuleSources): ContributingRule
   const rules: ContributingRule[] = [];
   for (const kind of RULE_KINDS) {
     const evidence = sentences
-      .filter((s) => !NEGATION.test(s.text) && MATCHERS[kind](s.text, s.implied))
+      .filter((s) => states(kind, s))
       .slice(0, MAX_EVIDENCE)
       .map((s) => toEvidence(s, `states the ${kind} rule`));
     if (evidence.length > 0) rules.push({ kind, evidence });
   }
   if (sources.prTemplate) rules.push(...templateSections(sources.prTemplate));
   return rules;
+}
+
+/** True when one clause of the sentence states the rule and is not negated. */
+function states(kind: RuleKind, sentence: Sentence): boolean {
+  return sentence.text
+    .split(CLAUSE_BREAK)
+    .some((clause) => !NEGATION.test(clause) && MATCHERS[kind](clause, sentence.implied));
 }
 
 interface Sentence {
