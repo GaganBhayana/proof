@@ -40,7 +40,7 @@ Status values: `todo`, `review (PR #n)`, `done (PR #n)`, `blocked: <reason>`. Si
 - Acceptance: fixtures from 5 realistic CONTRIBUTING files (written for tests, not copied) with expected rules.
 
 ### PR-006 Rule evaluation against a PR
-- Status: todo
+- Status: done (PR #6)
 - Size: M
 - Depends on: PR-002, PR-004, PR-005
 - Goal: `src/rules/evaluate.ts` checks each rule: linked issue present, tests changed, `Signed-off-by` on commits, CHANGELOG touched, empty template sections left as placeholders.
