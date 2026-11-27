@@ -24,7 +24,8 @@ export const TEMPLATE_SECTIONS_ID = 'rules.template-sections';
  *
  * A broken rule costs {@link RULE_VIOLATION_POINTS}; a kept rule scores 0. The tests and
  * changelog rules pass when the PR changes no source files (a docs-only fix should not need
- * either). Evidence lists where the rule is stated, then what was observed.
+ * either); changelog files and fragments never count as source. Evidence lists where the
+ * rule is stated, then what was observed.
  */
 export function evaluateRules(rules: readonly ContributingRule[], pr: PrSnapshot): CheckResult[] {
   const results: CheckResult[] = [];
@@ -87,8 +88,11 @@ function checkIssueLinked(rule: TextRule, pr: PrSnapshot): CheckResult {
   return result(rule, true, message, observed);
 }
 
+/** Changed source files. Changelog files and fragments are not source, even when `classifyPath` says so. */
 function sourceFiles(pr: PrSnapshot): string[] {
-  return pr.files.filter((file) => file.status !== 'unchanged' && classifyPath(file.path) === 'source').map((f) => f.path);
+  return pr.files
+    .filter((file) => file.status !== 'unchanged' && classifyPath(file.path) === 'source' && !isChangelogPath(file.path))
+    .map((f) => f.path);
 }
 
 function checkTestsChanged(rule: TextRule, pr: PrSnapshot): CheckResult {
@@ -178,10 +182,12 @@ function checkTemplateSections(rules: readonly TemplateSectionRule[], body: stri
   const found = bodySections(body);
   const unfilled: { rule: TemplateSectionRule; why: Unfilled }[] = [];
   for (const rule of rules) {
-    const content = found.get(headingKey(rule.section));
-    if (content === undefined) unfilled.push({ rule, why: 'missing' });
-    else if (content === '') unfilled.push({ rule, why: 'empty' });
-    else if (content === normalise(rule.placeholder)) unfilled.push({ rule, why: 'placeholder' });
+    const section = found.get(headingKey(rule.section));
+    if (section === undefined) unfilled.push({ rule, why: 'missing' });
+    else if (section.content === '') {
+      // A heading with only subheadings under it groups them; they are checked on their own.
+      if (!section.hasSubsections) unfilled.push({ rule, why: 'empty' });
+    } else if (section.content === normalise(rule.placeholder)) unfilled.push({ rule, why: 'placeholder' });
   }
   const evidence: Evidence[] = unfilled.slice(0, MAX_OBSERVATIONS).map(({ rule, why }) => ({
     ...(rule.evidence[0] ?? { note: '' }),
@@ -209,19 +215,48 @@ function sectionNote(section: string, why: Unfilled): string {
   return `The ${name} section still holds the template text`;
 }
 
-const HEADING = /^ {0,3}#{1,6}[ \t]+(.*?)[ \t#]*$/;
+/** An ATX heading's opening run of `#` and the text after it. Linear on any input. */
+const HEADING = /^ {0,3}(#{1,6})[ \t]+(.*)$/;
 const FENCE = /^ {0,3}(`{3,}|~{3,})/;
+
+/** A heading in the PR body: its level and its raw text without the closing `#` run. */
+interface Heading {
+  readonly level: number;
+  readonly text: string;
+}
+
+/** Parses an ATX heading line, or returns undefined when the line is not one. */
+function parseHeading(line: string): Heading | undefined {
+  const match = HEADING.exec(line);
+  if (!match) return undefined;
+  const text = match[2] ?? '';
+  // Strip trailing spaces, tabs and `#` with a loop: a regex like `(.*?)[ \t#]*$`
+  // backtracks quadratically on a long run of " #" in an untrusted body.
+  let end = text.length;
+  while (end > 0 && ' \t#'.includes(text.charAt(end - 1))) end -= 1;
+  return { level: (match[1] ?? '#').length, text: text.slice(0, end) };
+}
+
+/** The normalised text under a body heading, and whether a deeper heading follows it directly. */
+interface BodySection {
+  readonly content: string;
+  readonly hasSubsections: boolean;
+}
 
 /**
  * Maps each ATX heading in the PR body (normalised, first occurrence wins) to the
- * normalised text under it. Headings inside fenced code do not count.
+ * normalised text under it, up to the next heading of any level. Headings inside
+ * fenced code do not count.
  */
-function bodySections(body: string): Map<string, string> {
+function bodySections(body: string): Map<string, BodySection> {
   const lines = body.slice(0, MAX_BODY_LENGTH).replace(/<!--[\s\S]*?(?:-->|$)/g, ' ').split(/\r?\n/);
-  const sections = new Map<string, string>();
-  let current: { key: string; lines: string[] } | undefined;
-  const close = (): void => {
-    if (current && !sections.has(current.key)) sections.set(current.key, normalise(current.lines.join('\n')));
+  const sections = new Map<string, BodySection>();
+  let current: { key: string; level: number; lines: string[] } | undefined;
+  const close = (next: Heading | undefined): void => {
+    if (!current || sections.has(current.key)) return;
+    const content = normalise(current.lines.join('\n'));
+    const hasSubsections = content === '' && next !== undefined && next.level > current.level;
+    sections.set(current.key, { content, hasSubsections });
   };
   let fence: string | undefined;
   for (const line of lines) {
@@ -231,16 +266,16 @@ function bodySections(body: string): Map<string, string> {
     } else if (run !== undefined) {
       fence = run;
     } else {
-      const heading = HEADING.exec(line);
+      const heading = parseHeading(line);
       if (heading) {
-        close();
-        current = { key: headingKey(heading[1] ?? ''), lines: [] };
+        close(heading);
+        current = { key: headingKey(heading.text), level: heading.level, lines: [] };
         continue;
       }
     }
     current?.lines.push(line);
   }
-  close();
+  close(undefined);
   return sections;
 }
 

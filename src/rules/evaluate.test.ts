@@ -173,6 +173,21 @@ test('changelog-entry passes for a docs-only PR', () => {
   assertPass(one('changelog-entry', makePr({ files: [makeFile('docs/intro.md')] })));
 });
 
+test('a changelog-only PR needs no tests, even for fragments classified as source', () => {
+  // `newsfragments/12.bugfix` and `NEWS` have no known extension, so classifyPath calls them source.
+  const pr = makePr({ files: [makeFile('newsfragments/12.bugfix', { status: 'added' }), makeFile('NEWS')] });
+  const tests = one('tests-required', pr);
+  assertPass(tests);
+  assert.match(tests.message, /no source files/);
+  assertPass(one('changelog-entry', pr));
+});
+
+test('a fragment does not stand in for source next to real source changes', () => {
+  const pr = makePr({ files: [makeFile('src/a.ts'), makeFile('newsfragments/12.bugfix', { status: 'added' })] });
+  assertFail(one('tests-required', pr));
+  assertPass(one('changelog-entry', pr));
+});
+
 test('isChangelogPath: names and fragment folders, but not look-alike source files', () => {
   const yes = ['CHANGELOG.md', 'changelog', 'HISTORY.rst', 'NEWS', 'docs/RELEASE_NOTES.md', 'changes/42.feature.md', 'news/1.bugfix'];
   const no = ['src/news.ts', 'src/changes/diff.ts', 'lib/history.js', 'src/changelog/render.ts', 'docs/changes-guide.md'];
@@ -286,6 +301,30 @@ test('a heading inside a code fence does not count as the section', () => {
   );
   const r = sectionsResult(body);
   assert.ok(notes(r).includes('The PR body has no "How was this tested?" section'));
+});
+
+test('a heading with only subheadings under it is a group, not an empty section', () => {
+  const groupRules = extractContributingRules({
+    prTemplate: { path: '.github/pull_request_template.md', text: '## Changes\n\n### Added\n\n### Removed\n' },
+  }).filter((rule) => rule.kind === 'template-section');
+  const check = (body: string): CheckResult => evaluateRules(groupRules, makePr({ body }))[0] as CheckResult;
+  assertPass(check('## Changes\n\n### Added\n\nA flag.\n\n### Removed\n\nAn old option.\n'));
+  // The subsections are still checked on their own.
+  assert.deepEqual(notes(check('## Changes\n\n### Added\n\nA flag.\n\n### Removed\n')), ['The "Removed" section is empty']);
+  // A same-level heading after an empty section does not make it a group.
+  assert.deepEqual(notes(check('## Changes\n\n## Added\n\nA flag.\n\n### Removed\n\nx\n')), ['The "Changes" section is empty']);
+});
+
+test('closing # runs are stripped from headings, as in the template', () => {
+  assertPass(sectionsResult(filledBody.replace('## Description', '## Description ##')));
+});
+
+test('a hostile heading line in the body is parsed in linear time', () => {
+  const hostile = `# x${' #'.repeat(40_000)}y`;
+  const started = performance.now();
+  const r = sectionsResult(`${hostile}\n\n${filledBody}`);
+  assert.ok(performance.now() - started < 500, 'heading parsing must not backtrack');
+  assertPass(r);
 });
 
 test('CRLF bodies are read like LF bodies', () => {
