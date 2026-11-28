@@ -47,7 +47,7 @@ Status values: `todo`, `review (PR #n)`, `done (PR #n)`, `blocked: <reason>`. Si
 - Acceptance: tests for pass and fail of every rule kind; output is `CheckResult[]` with evidence.
 
 ### PR-007 Policy file schema and defaults
-- Status: review (PR #7)
+- Status: done (PR #7)
 - Size: S
 - Depends on: PR-001
 - Goal: `src/policy.ts` defines `.proof.yml` options (enabled checks, weights, thresholds, label names, external-author definition, autoClose with required `confirm: true`) with defaults and a validator returning readable errors.
