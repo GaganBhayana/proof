@@ -10,7 +10,10 @@ export const PRIORITIES = ['review-now', 'needs-info', 'low-evidence'] as const;
 /** One of {@link PRIORITIES}. */
 export type Priority = (typeof PRIORITIES)[number];
 
-/** Points each signal adds to (positive) or removes from (negative) the score of 50. */
+/**
+ * Points each signal adds to (positive) or removes from (negative) the score of 50.
+ * Bonuses must be 0 or above and penalties 0 or below; see {@link PENALTY_WEIGHTS}.
+ */
 export interface Weights {
   readonly linkedIssue: number;
   /** Upper end of the issue/diff match bonus (scaled by the 0–1 match). */
@@ -69,9 +72,13 @@ export const MAX_LABEL_LENGTH = 50;
 export const MAX_WEIGHT = 100;
 /** Most entries accepted in `external.ignoreUsers`. */
 export const MAX_IGNORED_USERS = 200;
+/** Weights that lower the score, so must be 0 or below. Every other weight is a bonus (0 or above). */
+export const PENALTY_WEIGHTS: readonly (keyof Weights)[] = ['testsRemovedOrSkipped', 'ciFailing', 'ruleViolation', 'rulesTotalMin', 'unrelatedChurn'];
 
 const ASSOCIATIONS: readonly AuthorAssociation[] = ['OWNER', 'MEMBER', 'COLLABORATOR', 'CONTRIBUTOR', 'FIRST_TIME_CONTRIBUTOR', 'FIRST_TIMER', 'NONE'];
 const LOGIN = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})(?:\[bot\])?$/;
+/** C0 controls, DEL and C1 controls. */
+const CONTROL_CHARS = /[\u0000-\u001f\u007f-\u009f]/;
 
 /** The policy used when `.proof.yml` is absent or leaves an option out. Matches docs/PLAN.md. */
 export const DEFAULT_POLICY: Policy = deepFreeze({
@@ -162,12 +169,18 @@ function readBoolean(value: unknown, path: string, fallback: boolean, errors: Po
   return fallback;
 }
 
+/** Allowed range for one number, with an optional note for the error message. */
+interface NumberRange {
+  readonly min: number;
+  readonly max: number;
+  readonly note?: string;
+}
+
 function readNumbers<K extends string>(
   value: unknown,
   path: string,
   defaults: Readonly<Record<K, number>>,
-  min: number,
-  max: number,
+  rangeOf: (key: K) => NumberRange,
   errors: PolicyError[],
 ): Record<K, number> {
   const keys = Object.keys(defaults) as K[];
@@ -176,19 +189,23 @@ function readNumbers<K extends string>(
   for (const key of keys) {
     const n = record[key];
     if (n === undefined) continue;
+    const { min, max, note } = rangeOf(key);
     if (typeof n === 'number' && Number.isFinite(n) && n >= min && n <= max) out[key] = n;
-    else errors.push({ path: join(path, key), message: `must be a number from ${min} to ${max}, got ${describe(n)}` });
+    else errors.push({ path: join(path, key), message: `must be a number from ${min} to ${max}${note ? ` (${note})` : ''}, got ${describe(n)}` });
   }
   return out;
 }
 
+const BONUS: NumberRange = { min: 0, max: MAX_WEIGHT, note: 'a bonus' };
+const PENALTY: NumberRange = { min: -MAX_WEIGHT, max: 0, note: 'a penalty' };
+
 function readWeights(value: unknown, errors: PolicyError[]): Weights {
-  return readNumbers(value, 'weights', DEFAULT_POLICY.weights, -MAX_WEIGHT, MAX_WEIGHT, errors);
+  return readNumbers(value, 'weights', DEFAULT_POLICY.weights, (key) => (PENALTY_WEIGHTS.includes(key) ? PENALTY : BONUS), errors);
 }
 
 function readThresholds(value: unknown, errors: PolicyError[]): Policy['thresholds'] {
   const before = errors.length;
-  const thresholds = readNumbers(value, 'thresholds', DEFAULT_POLICY.thresholds, 0, 100, errors);
+  const thresholds = readNumbers(value, 'thresholds', DEFAULT_POLICY.thresholds, () => ({ min: 0, max: 100 }), errors);
   if (errors.length === before && thresholds['review-now'] <= thresholds['needs-info']) {
     errors.push({
       path: 'thresholds.review-now',
@@ -204,8 +221,11 @@ function readLabels(value: unknown, errors: PolicyError[]): Policy['labels'] {
   for (const priority of PRIORITIES) {
     const name = record[priority];
     if (name === undefined) continue;
-    if (typeof name === 'string' && name.trim() !== '' && name.trim().length <= MAX_LABEL_LENGTH) out[priority] = name.trim();
-    else errors.push({ path: `labels.${priority}`, message: `must be a label name of 1 to ${MAX_LABEL_LENGTH} characters, got ${describe(name)}` });
+    if (isLabelName(name)) out[priority] = name.trim();
+    else {
+      const message = `must be a label name of 1 to ${MAX_LABEL_LENGTH} characters with no control characters, got ${describe(name)}`;
+      errors.push({ path: `labels.${priority}`, message });
+    }
   }
   const names = PRIORITIES.map((p) => out[p].toLowerCase());
   if (new Set(names).size !== names.length) {
@@ -214,13 +234,21 @@ function readLabels(value: unknown, errors: PolicyError[]): Policy['labels'] {
   return out;
 }
 
+function isLabelName(name: unknown): name is string {
+  if (typeof name !== 'string') return false;
+  const trimmed = name.trim();
+  return trimmed !== '' && trimmed.length <= MAX_LABEL_LENGTH && !CONTROL_CHARS.test(trimmed);
+}
+
 function readExternal(value: unknown, errors: PolicyError[]): ExternalAuthors {
   const d = DEFAULT_POLICY.external;
   const record = readObject(value, 'external', Object.keys(d), errors);
   return {
     associations: readList(record['associations'], 'external.associations', d.associations, 1, ASSOCIATIONS.length, isAssociation, `one of ${ASSOCIATIONS.join(', ')}`, errors),
     includeBots: readBoolean(record['includeBots'], 'external.includeBots', d.includeBots, errors),
-    ignoreUsers: readList(record['ignoreUsers'], 'external.ignoreUsers', d.ignoreUsers, 0, MAX_IGNORED_USERS, isLogin, 'a GitHub login', errors),
+    ignoreUsers: uniqueIgnoringCase(
+      readList(record['ignoreUsers'], 'external.ignoreUsers', d.ignoreUsers, 0, MAX_IGNORED_USERS, isLogin, 'a GitHub login', errors),
+    ),
   };
 }
 
@@ -245,6 +273,17 @@ function readList<T extends string>(
     else errors.push({ path: `${path}[${i}]`, message: `must be ${expected}, got ${describe(item)}` });
   });
   return [...new Set(items)];
+}
+
+/** Keeps the first spelling of each login; logins match ignoring case. */
+function uniqueIgnoringCase(logins: readonly string[]): readonly string[] {
+  const seen = new Set<string>();
+  return logins.filter((login) => {
+    const key = login.toLowerCase();
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }
 
 function isAssociation(item: unknown): item is AuthorAssociation {

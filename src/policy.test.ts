@@ -4,6 +4,7 @@ import { makeAuthor } from '../test/fixtures/pr.ts';
 import {
   DEFAULT_POLICY,
   MAX_LABEL_LENGTH,
+  PENALTY_WEIGHTS,
   formatPolicyErrors,
   isExternalAuthor,
   parsePolicy,
@@ -113,9 +114,45 @@ test('invalid values are reported with paths and readable messages', () => {
   );
   const byPath = new Map(errors.map((e) => [e.path, e.message]));
   assert.equal(byPath.get('checks.ci'), 'must be true or false, got "no"');
-  assert.equal(byPath.get('weights.testsAdded'), 'must be a number from -100 to 100, got 500');
-  assert.equal(byPath.get('labels.low-evidence'), 'must be a label name of 1 to 50 characters, got a 51-character string');
+  assert.equal(byPath.get('weights.testsAdded'), 'must be a number from 0 to 100 (a bonus), got 500');
+  assert.equal(
+    byPath.get('labels.low-evidence'),
+    'must be a label name of 1 to 50 characters with no control characters, got a 51-character string',
+  );
   assert.match(byPath.get('external.associations[0]') ?? '', /one of OWNER, MEMBER/);
+});
+
+test('weights keep their sign: bonuses 0 or above, penalties 0 or below', () => {
+  const errors = errorsOf({ weights: { testsRemovedOrSkipped: 20, issueMatch: -15, rulesTotalMin: 5, ciFailing: -101 } });
+  const byPath = new Map(errors.map((e) => [e.path, e.message]));
+  assert.deepEqual([...byPath.keys()], ['weights.issueMatch', 'weights.testsRemovedOrSkipped', 'weights.ciFailing', 'weights.rulesTotalMin']);
+  assert.equal(byPath.get('weights.testsRemovedOrSkipped'), 'must be a number from -100 to 0 (a penalty), got 20');
+  assert.equal(byPath.get('weights.issueMatch'), 'must be a number from 0 to 100 (a bonus), got -15');
+  assert.equal(byPath.get('weights.rulesTotalMin'), 'must be a number from -100 to 0 (a penalty), got 5');
+  // Zero switches a signal off either way.
+  const off = parsed({ weights: { linkedIssue: 0, ciFailing: 0, reproVerified: 100, rulesTotalMin: -100 } }).weights;
+  assert.deepEqual(off, { ...DEFAULT_POLICY.weights, linkedIssue: 0, ciFailing: 0, reproVerified: 100, rulesTotalMin: -100 });
+  // Every default agrees with the sign rule.
+  for (const [key, weight] of Object.entries(DEFAULT_POLICY.weights)) {
+    const penalty = (PENALTY_WEIGHTS as readonly string[]).includes(key);
+    assert.ok(penalty ? weight <= 0 : weight >= 0, key);
+  }
+});
+
+test('label names may not hold control characters', () => {
+  for (const name of ['proof:\nreview', 'tab\there', 'nul\u0000', 'del\u007f', 'c1\u0085']) {
+    assert.deepEqual(paths({ labels: { 'review-now': name } }), ['labels.review-now'], JSON.stringify(name));
+  }
+  assert.equal(parsed({ labels: { 'review-now': '\tready ✅\n' } }).labels['review-now'], 'ready ✅');
+});
+
+test('prototype keys from a parsed file are unknown options and change nothing', () => {
+  const input = JSON.parse('{"__proto__": {"checks": {"ci": false}}, "checks": {"constructor": true, "__proto__": {"ci": false}}}');
+  assert.deepEqual(paths(input), ['__proto__', 'checks.constructor', 'checks.__proto__']);
+  assert.equal(DEFAULT_POLICY.checks.ci, true);
+  assert.equal(({} as Record<string, unknown>)['checks'], undefined);
+  assert.equal(({} as Record<string, unknown>)['ci'], undefined);
+  assert.deepEqual(parsed(JSON.parse('{"checks": {"ci": false}}')).checks, { ...DEFAULT_POLICY.checks, ci: false });
 });
 
 test('sections of the wrong shape are rejected', () => {
@@ -142,6 +179,12 @@ test('repeated list entries are kept once', () => {
   const policy = parsed({ external: { associations: ['NONE', 'NONE', 'CONTRIBUTOR'], ignoreUsers: ['bob', 'bob'] } });
   assert.deepEqual(policy.external.associations, ['NONE', 'CONTRIBUTOR']);
   assert.deepEqual(policy.external.ignoreUsers, ['bob']);
+});
+
+test('ignoreUsers dedupes logins ignoring case, keeping the first spelling', () => {
+  const policy = parsed({ external: { ignoreUsers: ['Bob', 'bob', 'BOB', 'alice'] } });
+  assert.deepEqual(policy.external.ignoreUsers, ['Bob', 'alice']);
+  assert.equal(isExternalAuthor(makeAuthor({ login: 'bOb' }), policy.external), false);
 });
 
 test('error text never echoes long values from the file', () => {
